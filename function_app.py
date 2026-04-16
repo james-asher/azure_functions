@@ -5,11 +5,12 @@ from datetime import datetime, timedelta
 
 import azure.functions as func
 from azure.data.tables import TableServiceClient
+import logging
 
 # ==============================
 # App setup (Python v2 model)
 # ==============================
-app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
 # ==============================
 # Configuration
@@ -27,11 +28,16 @@ def _get_table():
     )
     table = service.get_table_client(TABLE_NAME)
     table.create_table_if_not_exists()
+    logging.info("StatsGoBoom: Table '%s' is ready", TABLE_NAME)
     return table
 
 
 def _log_event(counter: str, user: str):
+    logging.info("StatsGoBoom: entering _log_event")
+
     table = _get_table()
+    logging.info("StatsGoBoom: table client acquired")
+
     now = datetime.utcnow()
 
     entity = {
@@ -42,7 +48,9 @@ def _log_event(counter: str, user: str):
         "usr": user,
     }
 
+    logging.info("StatsGoBoom: inserting entity %s", entity)
     table.create_entity(entity)
+    logging.info("StatsGoBoom: entity inserted successfully")
 
 
 def _get_history(days: int = RETENTION_DAYS):
@@ -92,8 +100,17 @@ def track(req: func.HttpRequest) -> func.HttpResponse:
     log_error = "none"
     try:
         _log_event(counter, user)
-    except Exception:
-        log_error = "logging_failed"
+    except Exception as ex:
+        
+        logging.exception(
+            "StatsGoBoom: _log_event failed",
+            extra={
+                "counter": counter,
+                "user": user
+            }
+        )
+        log_error = str(ex)
+
         # Never break callers (telemetry must be non-blocking)
         pass
     js = "var user = " + json.dumps(user) + "; var counter = " + json.dumps(counter) + "; var logError = " + json.dumps(log_error) + ";"
