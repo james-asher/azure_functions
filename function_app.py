@@ -118,57 +118,66 @@ def track(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ==============================
-# /inspect  (Formatted Plain Text History)
+# /inspect  (Maintenance & History)
 # ==============================
 @app.function_name(name="inspect")
 @app.route(route="inspect", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def inspect(req: func.HttpRequest) -> func.HttpResponse:
     search_term = req.params.get("counter")
     target_user = req.params.get("usr")
+    should_delete = req.params.get("delete") == "true" # The hidden trigger
     days = int(req.params.get("days", RETENTION_DAYS))
     
-    raw_history = _get_history(days=min(days, 30))
+    table = _get_table()
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    # Fetch entities based on partition key (Date)
+    entities = list(table.query_entities(query_filter=f"PartitionKey ge '{cutoff}'"))
     
     is_wildcard = search_term.endswith('*') if search_term else False
     clean_search = search_term[:-1] if is_wildcard else search_term
 
     log_lines = []
+    deleted_count = 0
 
-    # Sort dates descending (newest days first)
-    for date_str in sorted(raw_history.keys(), reverse=True):
-        entries = raw_history[date_str]
+    # Sort newest to oldest
+    entities.sort(key=lambda x: x.get("ts", ""), reverse=True)
+
+    for e in entities:
+        c_name = e.get("cnt", "unknown")
+        u_name = e.get("usr", "anonymous")
+        pk = e["PartitionKey"]
+        rk = e["RowKey"]
+
+        # Filter Logic
+        match = True
+        if clean_search:
+            if is_wildcard:
+                if not c_name.startswith(clean_search): match = False
+            elif c_name != clean_search: match = False
         
-        # Sort entries within the day descending by timestamp
-        entries.sort(key=lambda x: x.get("ts", ""), reverse=True)
+        if target_user and u_name != target_user:
+            match = False
 
-        for e in entries:
-            c_name = e.get("cnt", "unknown")
-            u_name = e.get("usr", "anonymous")
-            ts_raw = e.get("ts", "")
+        if match:
+            if should_delete:
+                table.delete_entity(pk, rk)
+                deleted_count += 1
+            else:
+                # Format for display
+                try:
+                    dt = datetime.fromisoformat(e.get("ts", ""))
+                    cst_dt = dt - timedelta(hours=6) # CST adjustment
+                    ts_display = cst_dt.strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    ts_display = e.get("ts")
+                
+                log_lines.append(f"[{ts_display}] {u_name} \"{c_name}\"")
 
-            if clean_search:
-                if is_wildcard:
-                    if not c_name.startswith(clean_search): continue
-                elif c_name != clean_search: continue
-            
-            if target_user and u_name != target_user:
-                continue
+    if should_delete:
+        return func.HttpResponse(f"SUCCESS: Deleted {deleted_count} matching records.", mimetype="text/plain")
 
-            try:
-                # Parse UTC and subtract 6 hours for CST
-                dt = datetime.fromisoformat(ts_raw)
-                cst_dt = dt - timedelta(hours=6) 
-                ts_display = cst_dt.strftime("%Y-%m-%d %H:%M:%S")
-            except:
-                ts_display = ts_raw
-
-            log_lines.append(f"[{ts_display}] {u_name} \"{c_name}\"")
-
-    return func.HttpResponse(
-        "\n".join(log_lines),
-        mimetype="text/plain"
-    )
-
+    return func.HttpResponse("\n".join(log_lines), mimetype="text/plain")
 
 # ==============================
 # /dashboard  (HTML UI)
