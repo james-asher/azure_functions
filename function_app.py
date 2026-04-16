@@ -112,7 +112,7 @@ def track(req: func.HttpRequest) -> func.HttpResponse:
 
         # Never break callers (telemetry must be non-blocking)
         pass
-    js = "var user = " + json.dumps(user) + "; var counter = " + json.dumps(counter) + "; var logError = " + json.dumps(log_error) + ";"
+    js = "var user = " + json.dumps(user) + "; var counter = " + json.dumps(counter) + ";"
     # js = "var sitecounter = 0; var sitevisitors = 0;"
     return func.HttpResponse(js, mimetype="application/javascript")
 
