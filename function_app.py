@@ -10,7 +10,7 @@ import logging
 # ==============================
 # App setup (Python v2 model)
 # ==============================
-app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+# app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
 # ==============================
 # Configuration
@@ -86,7 +86,7 @@ def _cleanup_old(days: int = RETENTION_DAYS):
 # /track.js  (telemetry endpoint)
 # ==============================
 @app.function_name(name="track")
-@app.route(route="track.js", methods=["GET"])
+@app.route(route="track.js", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def track(req: func.HttpRequest) -> func.HttpResponse:
     counter = (
         req.params.get("counter")
@@ -120,7 +120,7 @@ def track(req: func.HttpRequest) -> func.HttpResponse:
 # /inspect  (Formatted Plain Text History)
 # ==============================
 @app.function_name(name="inspect")
-@app.route(route="inspect", methods=["GET"])
+@app.route(route="inspect", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def inspect(req: func.HttpRequest) -> func.HttpResponse:
     search_term = req.params.get("counter")
     target_user = req.params.get("usr")
@@ -173,7 +173,7 @@ def inspect(req: func.HttpRequest) -> func.HttpResponse:
 # /dashboard  (HTML UI)
 # ==============================
 @app.function_name(name="dashboard")
-@app.route(route="dashboard", methods=["GET"])
+@app.route(route="dashboard", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def dashboard(req: func.HttpRequest) -> func.HttpResponse:
     history = _get_history()
     history_json = json.dumps(history)
