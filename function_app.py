@@ -11,6 +11,7 @@ import logging
 # App setup (Python v2 model)
 # ==============================
 # app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+app = func.FunctionApp()
 
 # ==============================
 # Configuration
