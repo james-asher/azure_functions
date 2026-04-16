@@ -185,6 +185,7 @@ def dashboard(req: func.HttpRequest) -> func.HttpResponse:
 <html>
 <head>
     <title>StatsGoBoom Dashboard</title>
+    <meta http-equiv="refresh" content="300">
     <style>
         body {{ background: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; padding: 40px; }}
         .container {{ max-width: 1000px; margin: auto; }}
@@ -193,7 +194,7 @@ def dashboard(req: func.HttpRequest) -> func.HttpResponse:
         table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
         th {{ text-align: left; color: #888; text-transform: uppercase; font-size: 11px; padding: 10px; border-bottom: 1px solid #333; }}
         td {{ padding: 12px 10px; border-bottom: 1px solid #252525; font-size: 14px; }}
-        .highlight {{ color: #00ffcc; font-weight: bold; width: 80px; text-align: right; }}
+        .highlight {{ color: #00ffcc; font-weight: bold; width: 100px; text-align: right; }}
         .tag {{ background: #333; padding: 4px 10px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #00ffcc; text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: 0.2s; }}
         .tag:hover {{ background: #444; border-color: #00ffcc; }}
     </style>
@@ -227,15 +228,21 @@ def dashboard(req: func.HttpRequest) -> func.HttpResponse:
                 const dayData = data[date];
                 const stats = {{}};
                 
+                // Aggregate Hits and Unique Users
                 dayData.forEach(e => {{
-                    stats[e.cnt] = (stats[e.cnt] || 0) + 1;
+                    if (!stats[e.cnt]) {{
+                        stats[e.cnt] = {{ hits: 0, users: new Set() }};
+                    }}
+                    stats[e.cnt].hits += 1;
+                    stats[e.cnt].users.add(e.usr);
                 }});
 
-                // Alphabetical sort for counters
+                // Sort counters alphabetically
                 Object.keys(stats).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())).forEach(counter => {{
                     tableRows += `<tr>
                         <td><span class="tag" onclick="inspectCounter('${{counter}}')">${{counter}}</span></td>
-                        <td class="highlight">${{stats[counter]}}</td>
+                        <td class="highlight">${{stats[counter].hits}}</td>
+                        <td class="highlight" style="color: #888;">${{stats[counter].users.size}}</td>
                     </tr>`;
                 }});
 
@@ -243,7 +250,13 @@ def dashboard(req: func.HttpRequest) -> func.HttpResponse:
                     <div class="card">
                         <h3 style="margin-top:0; color:#888;">${{date}}</h3>
                         <table>
-                            <thead><tr><th>Counter Name (Alphabetical)</th><th style="text-align:right;">Hits</th></tr></thead>
+                            <thead>
+                                <tr>
+                                    <th>Counter Name (Alphabetical)</th>
+                                    <th style="text-align:right;">Hits</th>
+                                    <th style="text-align:right;">Users</th>
+                                </tr>
+                            </thead>
                             <tbody>${{tableRows}}</tbody>
                         </table>
                     </div>`;
