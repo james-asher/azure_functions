@@ -26,10 +26,8 @@ def _get_table():
     service = TableServiceClient.from_connection_string(
         os.environ["AzureWebJobsStorage"]
     )
-    table = service.get_table_client(TABLE_NAME)
-    table.create_table_if_not_exists()
-    logging.info("StatsGoBoom: Table '%s' is ready", TABLE_NAME)
-    return table
+    service.create_table_if_not_exists(TABLE_NAME)
+    return service.get_table_client(TABLE_NAME)
 
 
 def _log_event(counter: str, user: str):
