@@ -123,22 +123,15 @@ def track(req: func.HttpRequest) -> func.HttpResponse:
 @app.function_name(name="inspect")
 @app.route(route="inspect", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def inspect(req: func.HttpRequest) -> func.HttpResponse:
-    # 1. Get query params
     search_term = req.params.get("counter")
     target_user = req.params.get("usr")
-    # Robust check for the delete flag
     should_delete = str(req.params.get("delete")).lower() == "true"
     days = int(req.params.get("days", RETENTION_DAYS))
     
     table = _get_table()
-    # Use 30 days for maintenance to ensure we find the "junk"
     cutoff = (datetime.utcnow() - timedelta(days=min(days, 30))).strftime("%Y-%m-%d")
 
-    # Fetch entities
-    try:
-        entities = list(table.query_entities(query_filter=f"PartitionKey ge '{cutoff}'"))
-    except Exception as e:
-        return func.HttpResponse(f"Storage Error: {str(e)}", status_code=500)
+    entities = list(table.query_entities(query_filter=f"PartitionKey ge '{cutoff}'"))
     
     is_wildcard = search_term.endswith('*') if search_term else False
     clean_search = search_term[:-1] if is_wildcard else search_term
@@ -146,14 +139,12 @@ def inspect(req: func.HttpRequest) -> func.HttpResponse:
     log_lines = []
     deleted_count = 0
 
-    # Sort newest first
     entities.sort(key=lambda x: x.get("ts", ""), reverse=True)
 
     for e in entities:
         c_name = e.get("cnt", "unknown")
         u_name = e.get("usr", "anonymous")
         
-        # Matching Logic
         match = True
         if clean_search:
             if is_wildcard:
@@ -163,7 +154,6 @@ def inspect(req: func.HttpRequest) -> func.HttpResponse:
         if target_user and u_name != target_user:
             match = False
 
-        # Action Logic
         if match:
             if should_delete:
                 table.delete_entity(e["PartitionKey"], e["RowKey"])
@@ -171,7 +161,13 @@ def inspect(req: func.HttpRequest) -> func.HttpResponse:
             else:
                 try:
                     dt = datetime.fromisoformat(e.get("ts", ""))
-                    cst_dt = dt - timedelta(hours=6) # Central Time
+                    
+                    # IMPROVED TZ LOGIC: 
+                    # Use -5 for April through October (approx DST), -6 otherwise.
+                    # For a truly perfect solution, use: from zoneinfo import ZoneInfo
+                    tz_offset = -5 if (3 < dt.month < 11) else -6
+                    cst_dt = dt + timedelta(hours=tz_offset) 
+                    
                     ts_display = cst_dt.strftime("%Y-%m-%d %H:%M:%S")
                 except:
                     ts_display = e.get("ts")
@@ -180,15 +176,12 @@ def inspect(req: func.HttpRequest) -> func.HttpResponse:
 
     if should_delete:
         return func.HttpResponse(
-            f"CLEANUP COMPLETE\n----------------\nCriteria: counter={search_term}, user={target_user}\nAction: Deleted {deleted_count} entries.", 
+            f"CLEANUP COMPLETE\n----------------\nDeleted {deleted_count} entries.", 
             mimetype="text/plain"
         )
 
-    # If no matches found for display
-    if not log_lines:
-        return func.HttpResponse(f"No entries found matching: counter={search_term}, user={target_user}", mimetype="text/plain")
-
     return func.HttpResponse("\n".join(log_lines), mimetype="text/plain")
+
 
 # ==============================
 # /dashboard  (HTML UI)
