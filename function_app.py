@@ -123,16 +123,22 @@ def track(req: func.HttpRequest) -> func.HttpResponse:
 @app.function_name(name="inspect")
 @app.route(route="inspect", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def inspect(req: func.HttpRequest) -> func.HttpResponse:
+    # 1. Get query params
     search_term = req.params.get("counter")
     target_user = req.params.get("usr")
-    should_delete = req.params.get("delete") == "true" # The hidden trigger
+    # Robust check for the delete flag
+    should_delete = str(req.params.get("delete")).lower() == "true"
     days = int(req.params.get("days", RETENTION_DAYS))
     
     table = _get_table()
-    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    # Use 30 days for maintenance to ensure we find the "junk"
+    cutoff = (datetime.utcnow() - timedelta(days=min(days, 30))).strftime("%Y-%m-%d")
 
-    # Fetch entities based on partition key (Date)
-    entities = list(table.query_entities(query_filter=f"PartitionKey ge '{cutoff}'"))
+    # Fetch entities
+    try:
+        entities = list(table.query_entities(query_filter=f"PartitionKey ge '{cutoff}'"))
+    except Exception as e:
+        return func.HttpResponse(f"Storage Error: {str(e)}", status_code=500)
     
     is_wildcard = search_term.endswith('*') if search_term else False
     clean_search = search_term[:-1] if is_wildcard else search_term
@@ -140,16 +146,14 @@ def inspect(req: func.HttpRequest) -> func.HttpResponse:
     log_lines = []
     deleted_count = 0
 
-    # Sort newest to oldest
+    # Sort newest first
     entities.sort(key=lambda x: x.get("ts", ""), reverse=True)
 
     for e in entities:
         c_name = e.get("cnt", "unknown")
         u_name = e.get("usr", "anonymous")
-        pk = e["PartitionKey"]
-        rk = e["RowKey"]
-
-        # Filter Logic
+        
+        # Matching Logic
         match = True
         if clean_search:
             if is_wildcard:
@@ -159,15 +163,15 @@ def inspect(req: func.HttpRequest) -> func.HttpResponse:
         if target_user and u_name != target_user:
             match = False
 
+        # Action Logic
         if match:
             if should_delete:
-                table.delete_entity(pk, rk)
+                table.delete_entity(e["PartitionKey"], e["RowKey"])
                 deleted_count += 1
             else:
-                # Format for display
                 try:
                     dt = datetime.fromisoformat(e.get("ts", ""))
-                    cst_dt = dt - timedelta(hours=6) # CST adjustment
+                    cst_dt = dt - timedelta(hours=6) # Central Time
                     ts_display = cst_dt.strftime("%Y-%m-%d %H:%M:%S")
                 except:
                     ts_display = e.get("ts")
@@ -175,7 +179,14 @@ def inspect(req: func.HttpRequest) -> func.HttpResponse:
                 log_lines.append(f"[{ts_display}] {u_name} \"{c_name}\"")
 
     if should_delete:
-        return func.HttpResponse(f"SUCCESS: Deleted {deleted_count} matching records.", mimetype="text/plain")
+        return func.HttpResponse(
+            f"CLEANUP COMPLETE\n----------------\nCriteria: counter={search_term}, user={target_user}\nAction: Deleted {deleted_count} entries.", 
+            mimetype="text/plain"
+        )
+
+    # If no matches found for display
+    if not log_lines:
+        return func.HttpResponse(f"No entries found matching: counter={search_term}, user={target_user}", mimetype="text/plain")
 
     return func.HttpResponse("\n".join(log_lines), mimetype="text/plain")
 
