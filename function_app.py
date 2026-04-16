@@ -145,52 +145,77 @@ def dashboard(req: func.HttpRequest) -> func.HttpResponse:
 <html>
 <head>
   <title>StatsGoBoom Dashboard</title>
+  <meta http-equiv="refresh" content="300">
   <style>
-    body {{
-      background: #121212;
-      color: #e0e0e0;
-      font-family: 'Segoe UI', sans-serif;
-      padding: 40px;
-    }}
-    .container {{
-      max-width: 1000px;
-      margin: auto;
-    }}
-    .card {{
-      background: #1e1e1e;
-      padding: 20px;
-      border-radius: 10px;
-      margin-top: 20px;
-      border: 1px solid #333;
-    }}
-    pre {{
-      white-space: pre-wrap;
-    }}
+    body {{ background: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; padding: 40px; }}
+    .container {{ max-width: 1000px; margin: auto; }}
+    .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 20px; }}
+    .card {{ background: #1e1e1e; padding: 20px; border-radius: 10px; margin-top: 20px; border: 1px solid #333; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+    th {{ text-align: left; color: #888; text-transform: uppercase; font-size: 11px; padding: 10px; border-bottom: 1px solid #333; }}
+    td {{ padding: 12px 10px; border-bottom: 1px solid #252525; font-size: 14px; }}
+    .highlight {{ color: #00ffcc; font-weight: bold; width: 80px; text-align: right; }}
+    .tag {{ background: #333; padding: 4px 10px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #00ffcc; text-decoration: none; border: 1px solid transparent; transition: 0.2s; }}
+    .tag:hover {{ background: #444; border-color: #00ffcc; cursor: pointer; }}
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>StatsGoBoom</h1>
-    <h3>10‑Day Activity Audit</h3>
-    <div class="card">
-      <pre id="content"></pre>
+    <div class="header">
+        <h1>StatsGoBoom <span style="color:#555;">| 10-Day Audit</span></h1>
+        <div><a href="/api/inspect" target="_blank" style="color:#888; text-decoration:none; font-size: 14px;">View Raw JSON &raquo;</a></div>
     </div>
+    <div id="content"></div>
   </div>
 
   <script>
     const data = {history_json};
-    const el = document.getElementById("content");
+    const content = document.getElementById('content');
 
     if (Object.keys(data).length === 0) {{
-      el.textContent = "No activity recorded yet.";
+      content.innerHTML = '<div class="card">No activity recorded yet.</div>';
     }} else {{
-      el.textContent = JSON.stringify(data, null, 2);
+      // Sort dates descending (Newest date card at top)
+      Object.keys(data).sort().reverse().forEach(date => {{
+        let tableRows = "";
+
+        // Sort counters alphabetically within each day
+        const counters = data[date];
+        
+        // Note: The Azure version stores a list of events. 
+        // We aggregate them here for the table view.
+        const stats = {{}};
+        counters.forEach(e => {{
+            stats[e.cnt] = (stats[e.cnt] || 0) + 1;
+        }});
+
+        const sortedCounterNames = Object.keys(stats).sort((a, b) => 
+            a.toLowerCase().localeCompare(b.toLowerCase())
+        );
+
+        sortedCounterNames.forEach(counterName => {{
+          tableRows += `<tr>
+            <td><span class="tag">${{counterName}}</span></td>
+            <td class="highlight">${{stats[counterName]}}</td>
+          </tr>`;
+        }});
+
+        content.innerHTML += `
+          <div class="card">
+            <h3 style="margin-top:0; color:#888;">${{date}}</h3>
+            <table>
+              <thead>
+                <tr><th>Counter Name (Alphabetical)</th><th style="text-align:right;">Hits</th></tr>
+              </thead>
+              <tbody>${{tableRows}}</tbody>
+            </table>
+          </div>`;
+      }});
     }}
   </script>
 </body>
 </html>
 """
-
     return func.HttpResponse(html, mimetype="text/html")
 
 

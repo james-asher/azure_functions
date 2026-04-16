@@ -1,0 +1,2 @@
+func azure functionapp publish statsgoboom-func
+
