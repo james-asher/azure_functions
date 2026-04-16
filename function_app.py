@@ -117,16 +117,55 @@ def track(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ==============================
-# /inspect  (raw JSON history)
+# /inspect  (Formatted JSON history)
 # ==============================
 @app.function_name(name="inspect")
 @app.route(route="inspect", methods=["GET"])
 def inspect(req: func.HttpRequest) -> func.HttpResponse:
+    # 1. Get query params
+    search_term = req.params.get("counter")
     days = int(req.params.get("days", RETENTION_DAYS))
-    history = _get_history(days=min(days, 30))
+    
+    # 2. Fetch raw history
+    raw_history = _get_history(days=min(days, 30))
+    
+    # 3. Process data to match Flask format (Hits/Visitors)
+    is_wildcard = search_term.endswith('*') if search_term else False
+    clean_search = search_term[:-1] if is_wildcard else search_term
+
+    formatted_history = {}
+
+    for date_str, entries in raw_history.items():
+        day_stats = {}
+        for e in entries:
+            c_name = e.get("cnt", "unknown")
+            user_id = e.get("usr", "anonymous")
+
+            # Apply filtering logic
+            if clean_search:
+                if is_wildcard:
+                    if not c_name.startswith(clean_search): continue
+                elif c_name != clean_search: continue
+
+            if c_name not in day_stats:
+                day_stats[c_name] = {"hits": 0, "visitors": set()}
+            
+            day_stats[c_name]["hits"] += 1
+            day_stats[c_name]["visitors"].add(user_id)
+
+        # Finalize counts for this day
+        day_output = {}
+        for c_name, stats in day_stats.items():
+            day_output[c_name] = {
+                "hits": stats["hits"],
+                "visitors": len(stats["visitors"])
+            }
+        
+        if day_output:
+            formatted_history[date_str] = day_output
 
     return func.HttpResponse(
-        json.dumps(history, indent=2),
+        json.dumps(formatted_history, indent=2),
         mimetype="application/json"
     )
 
@@ -139,84 +178,84 @@ def inspect(req: func.HttpRequest) -> func.HttpResponse:
 def dashboard(req: func.HttpRequest) -> func.HttpResponse:
     history = _get_history()
     history_json = json.dumps(history)
+    
+    # key for the inspect endpoint as requested
+    FUNC_KEY = os.getenv("INSPECT_KEY", "")
 
     html = f"""
 <!DOCTYPE html>
 <html>
 <head>
-  <title>StatsGoBoom Dashboard</title>
-  <meta http-equiv="refresh" content="300">
-  <style>
-    body {{ background: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; padding: 40px; }}
-    .container {{ max-width: 1000px; margin: auto; }}
-    .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 20px; }}
-    .card {{ background: #1e1e1e; padding: 20px; border-radius: 10px; margin-top: 20px; border: 1px solid #333; }}
-    table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-    th {{ text-align: left; color: #888; text-transform: uppercase; font-size: 11px; padding: 10px; border-bottom: 1px solid #333; }}
-    td {{ padding: 12px 10px; border-bottom: 1px solid #252525; font-size: 14px; }}
-    .highlight {{ color: #00ffcc; font-weight: bold; width: 80px; text-align: right; }}
-    .tag {{ background: #333; padding: 4px 10px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #00ffcc; text-decoration: none; border: 1px solid transparent; transition: 0.2s; }}
-    .tag:hover {{ background: #444; border-color: #00ffcc; cursor: pointer; }}
-  </style>
+    <title>StatsGoBoom Dashboard</title>
+    <style>
+        body {{ background: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; padding: 40px; }}
+        .container {{ max-width: 1000px; margin: auto; }}
+        .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 20px; }}
+        .card {{ background: #1e1e1e; padding: 20px; border-radius: 10px; margin-top: 20px; border: 1px solid #333; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+        th {{ text-align: left; color: #888; text-transform: uppercase; font-size: 11px; padding: 10px; border-bottom: 1px solid #333; }}
+        td {{ padding: 12px 10px; border-bottom: 1px solid #252525; font-size: 14px; }}
+        .highlight {{ color: #00ffcc; font-weight: bold; width: 80px; text-align: right; }}
+        .tag {{ background: #333; padding: 4px 10px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #00ffcc; text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: 0.2s; }}
+        .tag:hover {{ background: #444; border-color: #00ffcc; }}
+    </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-        <h1>StatsGoBoom <span style="color:#555;">| 10-Day Audit</span></h1>
-        <div><a href="/api/inspect" target="_blank" style="color:#888; text-decoration:none; font-size: 14px;">View Raw JSON &raquo;</a></div>
+    <div class="container">
+        <div class="header">
+            <h1>StatsGoBoom <span style="color:#555;">| 10-Day Audit</span></h1>
+            <div style="color:#888; font-size: 12px;">Click a tag to inspect filter</div>
+        </div>
+        <div id="content"></div>
     </div>
-    <div id="content"></div>
-  </div>
 
-  <script>
-    const data = {history_json};
-    const content = document.getElementById('content');
+    <script>
+        const data = {history_json};
+        const content = document.getElementById('content');
+        const auth = "{FUNC_KEY}";
 
-    if (Object.keys(data).length === 0) {{
-      content.innerHTML = '<div class="card">No activity recorded yet.</div>';
-    }} else {{
-      // Sort dates descending (Newest date card at top)
-      Object.keys(data).sort().reverse().forEach(date => {{
-        let tableRows = "";
+        function inspectCounter(name) {{
+            // Construct the URL with the mandatory code/key
+            const url = `/api/inspect?code=${{auth}}&counter=${{encodeURIComponent(name)}}`;
+            window.open(url, '_blank');
+        }}
 
-        // Sort counters alphabetically within each day
-        const counters = data[date];
-        
-        // Note: The Azure version stores a list of events. 
-        // We aggregate them here for the table view.
-        const stats = {{}};
-        counters.forEach(e => {{
-            stats[e.cnt] = (stats[e.cnt] || 0) + 1;
-        }});
+        if (Object.keys(data).length === 0) {{
+            content.innerHTML = '<div class="card">No activity recorded yet.</div>';
+        }} else {{
+            Object.keys(data).sort().reverse().forEach(date => {{
+                let tableRows = "";
+                
+                // Aggregating for the initial view
+                const dayData = data[date];
+                const stats = {{}};
+                dayData.forEach(e => {{
+                    stats[e.cnt] = (stats[e.cnt] || 0) + 1;
+                }});
 
-        const sortedCounterNames = Object.keys(stats).sort((a, b) => 
-            a.toLowerCase().localeCompare(b.toLowerCase())
-        );
+                Object.keys(stats).sort().forEach(counter => {{
+                    tableRows += `<tr>
+                        <td><span class="tag" onclick="inspectCounter('${{counter}}')">${{counter}}</span></td>
+                        <td class="highlight">${{stats[counter]}}</td>
+                    </tr>`;
+                }});
 
-        sortedCounterNames.forEach(counterName => {{
-          tableRows += `<tr>
-            <td><span class="tag">${{counterName}}</span></td>
-            <td class="highlight">${{stats[counterName]}}</td>
-          </tr>`;
-        }});
-
-        content.innerHTML += `
-          <div class="card">
-            <h3 style="margin-top:0; color:#888;">${{date}}</h3>
-            <table>
-              <thead>
-                <tr><th>Counter Name (Alphabetical)</th><th style="text-align:right;">Hits</th></tr>
-              </thead>
-              <tbody>${{tableRows}}</tbody>
-            </table>
-          </div>`;
-      }});
-    }}
-  </script>
+                content.innerHTML += `
+                    <div class="card">
+                        <h3 style="margin-top:0; color:#888;">${{date}}</h3>
+                        <table>
+                            <thead><tr><th>Counter Name</th><th style="text-align:right;">Hits</th></tr></thead>
+                            <tbody>${{tableRows}}</tbody>
+                        </table>
+                    </div>`;
+            }});
+        }}
+    </script>
 </body>
 </html>
 """
     return func.HttpResponse(html, mimetype="text/html")
+
 
 
 # ==============================
