@@ -117,56 +117,55 @@ def track(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ==============================
-# /inspect  (Formatted JSON history)
+# /inspect  (Formatted Plain Text History)
 # ==============================
 @app.function_name(name="inspect")
 @app.route(route="inspect", methods=["GET"])
 def inspect(req: func.HttpRequest) -> func.HttpResponse:
-    # 1. Get query params
     search_term = req.params.get("counter")
+    target_user = req.params.get("usr")
     days = int(req.params.get("days", RETENTION_DAYS))
     
-    # 2. Fetch raw history
     raw_history = _get_history(days=min(days, 30))
     
-    # 3. Process data to match Flask format (Hits/Visitors)
     is_wildcard = search_term.endswith('*') if search_term else False
     clean_search = search_term[:-1] if is_wildcard else search_term
 
-    formatted_history = {}
+    log_lines = []
 
-    for date_str, entries in raw_history.items():
-        day_stats = {}
+    # Sort dates descending (newest days first)
+    for date_str in sorted(raw_history.keys(), reverse=True):
+        entries = raw_history[date_str]
+        
+        # Sort entries within the day descending by timestamp
+        entries.sort(key=lambda x: x.get("ts", ""), reverse=True)
+
         for e in entries:
             c_name = e.get("cnt", "unknown")
-            user_id = e.get("usr", "anonymous")
+            u_name = e.get("usr", "anonymous")
+            ts_raw = e.get("ts", "")
 
-            # Apply filtering logic
             if clean_search:
                 if is_wildcard:
                     if not c_name.startswith(clean_search): continue
                 elif c_name != clean_search: continue
-
-            if c_name not in day_stats:
-                day_stats[c_name] = {"hits": 0, "visitors": set()}
             
-            day_stats[c_name]["hits"] += 1
-            day_stats[c_name]["visitors"].add(user_id)
+            if target_user and u_name != target_user:
+                continue
 
-        # Finalize counts for this day
-        day_output = {}
-        for c_name, stats in day_stats.items():
-            day_output[c_name] = {
-                "hits": stats["hits"],
-                "visitors": len(stats["visitors"])
-            }
-        
-        if day_output:
-            formatted_history[date_str] = day_output
+            try:
+                # Parse UTC and subtract 6 hours for CST
+                dt = datetime.fromisoformat(ts_raw)
+                cst_dt = dt - timedelta(hours=6) 
+                ts_display = cst_dt.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                ts_display = ts_raw
+
+            log_lines.append(f"[{ts_display}] {u_name} \"{c_name}\"")
 
     return func.HttpResponse(
-        json.dumps(formatted_history, indent=2),
-        mimetype="application/json"
+        "\n".join(log_lines),
+        mimetype="text/plain"
     )
 
 
@@ -178,8 +177,6 @@ def inspect(req: func.HttpRequest) -> func.HttpResponse:
 def dashboard(req: func.HttpRequest) -> func.HttpResponse:
     history = _get_history()
     history_json = json.dumps(history)
-    
-    # key for the inspect endpoint as requested
     FUNC_KEY = os.getenv("INSPECT_KEY", "")
 
     html = f"""
@@ -204,7 +201,9 @@ def dashboard(req: func.HttpRequest) -> func.HttpResponse:
     <div class="container">
         <div class="header">
             <h1>StatsGoBoom <span style="color:#555;">| 10-Day Audit</span></h1>
-            <div style="color:#888; font-size: 12px;">Click a tag to inspect filter</div>
+            <div>
+                <a href="/api/inspect?code={FUNC_KEY}" target="_blank" style="color:#888; text-decoration:none; font-size: 14px;">Full Raw Logs &raquo;</a>
+            </div>
         </div>
         <div id="content"></div>
     </div>
@@ -215,7 +214,6 @@ def dashboard(req: func.HttpRequest) -> func.HttpResponse:
         const auth = "{FUNC_KEY}";
 
         function inspectCounter(name) {{
-            // Construct the URL with the mandatory code/key
             const url = `/api/inspect?code=${{auth}}&counter=${{encodeURIComponent(name)}}`;
             window.open(url, '_blank');
         }}
@@ -225,15 +223,15 @@ def dashboard(req: func.HttpRequest) -> func.HttpResponse:
         }} else {{
             Object.keys(data).sort().reverse().forEach(date => {{
                 let tableRows = "";
-                
-                // Aggregating for the initial view
                 const dayData = data[date];
                 const stats = {{}};
+                
                 dayData.forEach(e => {{
                     stats[e.cnt] = (stats[e.cnt] || 0) + 1;
                 }});
 
-                Object.keys(stats).sort().forEach(counter => {{
+                // Alphabetical sort for counters
+                Object.keys(stats).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())).forEach(counter => {{
                     tableRows += `<tr>
                         <td><span class="tag" onclick="inspectCounter('${{counter}}')">${{counter}}</span></td>
                         <td class="highlight">${{stats[counter]}}</td>
@@ -244,7 +242,7 @@ def dashboard(req: func.HttpRequest) -> func.HttpResponse:
                     <div class="card">
                         <h3 style="margin-top:0; color:#888;">${{date}}</h3>
                         <table>
-                            <thead><tr><th>Counter Name</th><th style="text-align:right;">Hits</th></tr></thead>
+                            <thead><tr><th>Counter Name (Alphabetical)</th><th style="text-align:right;">Hits</th></tr></thead>
                             <tbody>${{tableRows}}</tbody>
                         </table>
                     </div>`;
@@ -255,7 +253,6 @@ def dashboard(req: func.HttpRequest) -> func.HttpResponse:
 </html>
 """
     return func.HttpResponse(html, mimetype="text/html")
-
 
 
 # ==============================
