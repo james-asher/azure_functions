@@ -89,13 +89,15 @@ def track(req: func.HttpRequest) -> func.HttpResponse:
     )
     user = req.params.get("usr") or "anonymous"
 
+    log_error = "none"
     try:
         _log_event(counter, user)
     except Exception:
+        log_error = "logging_failed"
         # Never break callers (telemetry must be non-blocking)
         pass
-
-    js = "var sitecounter = 0; var sitevisitors = 0;"
+    js = "var user = " + json.dumps(user) + "; var counter = " + json.dumps(counter) + "; var logError = " + json.dumps(log_error) + ";"
+    # js = "var sitecounter = 0; var sitevisitors = 0;"
     return func.HttpResponse(js, mimetype="application/javascript")
 
 
